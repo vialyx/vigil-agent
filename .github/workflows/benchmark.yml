@@ -1,0 +1,70 @@
+name: Benchmark Gate
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/benchmark.yml"
+      - "scripts/benchmark_compare.py"
+
+env:
+  CARGO_TERM_COLOR: always
+  REGRESSION_THRESHOLD_PCT: "15"
+
+jobs:
+  benchmark:
+    name: Benchmark regression gate
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target-bench-base
+            target-bench-pr
+          key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-bench-
+
+      - name: Benchmark base branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_REF="${{ github.base_ref }}"
+          git fetch origin "${BASE_REF}" --depth=1
+          git worktree add /tmp/vigil-agent-base "origin/${BASE_REF}"
+
+          pushd /tmp/vigil-agent-base
+          CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target-bench-base" cargo bench --bench perf -- --noplot
+          popd
+
+          mkdir -p "${GITHUB_WORKSPACE}/.benchmarks/base"
+          cp -R "${GITHUB_WORKSPACE}/target-bench-base/criterion/." "${GITHUB_WORKSPACE}/.benchmarks/base/"
+
+      - name: Benchmark PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_TARGET_DIR="${GITHUB_WORKSPACE}/target-bench-pr" cargo bench --bench perf -- --noplot
+          mkdir -p "${GITHUB_WORKSPACE}/.benchmarks/current"
+          cp -R "${GITHUB_WORKSPACE}/target-bench-pr/criterion/." "${GITHUB_WORKSPACE}/.benchmarks/current/"
+
+      - name: Compare benchmark results
+        shell: bash
+        run: |
+          python3 scripts/benchmark_compare.py \
+            --base .benchmarks/base \
+            --current .benchmarks/current \
+            --threshold-pct "${REGRESSION_THRESHOLD_PCT}"

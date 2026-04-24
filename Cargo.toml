@@ -53,6 +53,11 @@ x11 = ["x11rb"]
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "perf"
+harness = false
 
 [profile.release]
 lto = true
