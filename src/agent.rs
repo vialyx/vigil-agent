@@ -219,3 +219,149 @@ pub async fn run_agent<C: Collector + 'static>(
     let _ = policy;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::collector::Collector;
+    use crate::ipc::AgentState;
+    use crate::risk::UsageFeatures;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::tempdir;
+    use tokio::sync::RwLock;
+
+    #[derive(Clone)]
+    struct MockCollector {
+        features: UsageFeatures,
+        collect_calls: Arc<AtomicUsize>,
+        policy_updates: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Collector for MockCollector {
+        async fn collect(&self) -> anyhow::Result<UsageFeatures> {
+            self.collect_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.features.clone())
+        }
+
+        fn name(&self) -> &'static str {
+            "mock"
+        }
+
+        fn update_policy(&self, _policy: crate::config::PolicyConfig) -> anyhow::Result<()> {
+            self.policy_updates.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    async fn wait_for_first_event(state: &SharedState) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if state.read().await.latest_event.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("agent did not publish first event in time");
+    }
+
+    fn test_config(db_path: std::path::PathBuf) -> Config {
+        let mut cfg = Config::default();
+        cfg.agent.db_path = db_path;
+        cfg.agent.scoring_interval_secs = 1;
+        cfg.telemetry.emit_interval_secs = 3600;
+        cfg
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_updates_state_and_persists_event() {
+        let dir = tempdir().expect("tempdir");
+        let db = Arc::new(AgentDb::open(&dir.path().join("agent.db")).expect("open db"));
+        let state: SharedState = Arc::new(RwLock::new(AgentState::default()));
+
+        let collect_calls = Arc::new(AtomicUsize::new(0));
+        let policy_updates = Arc::new(AtomicUsize::new(0));
+        let collector = MockCollector {
+            features: UsageFeatures {
+                off_hours_activity_score: 0.9,
+                screen_recording_active: true,
+                clipboard_access_count: 10,
+                ..Default::default()
+            },
+            collect_calls: Arc::clone(&collect_calls),
+            policy_updates,
+        };
+
+        let cfg = test_config(dir.path().join("agent.db"));
+        let handle = tokio::spawn(run_agent(
+            cfg,
+            collector,
+            Arc::clone(&db),
+            Arc::clone(&state),
+        ));
+
+        wait_for_first_event(&state).await;
+
+        let st = state.read().await;
+        assert!(st.latest_event.is_some());
+        assert!(st.latest_features.is_some());
+        drop(st);
+
+        let events = db.load_events().expect("load events");
+        assert!(!events.is_empty(), "expected at least one persisted event");
+        assert!(collect_calls.load(Ordering::Relaxed) >= 1);
+
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_run_agent_applies_pending_policy() {
+        let dir = tempdir().expect("tempdir");
+        let db = Arc::new(AgentDb::open(&dir.path().join("agent.db")).expect("open db"));
+        let state: SharedState = Arc::new(RwLock::new(AgentState::default()));
+
+        let collect_calls = Arc::new(AtomicUsize::new(0));
+        let policy_updates = Arc::new(AtomicUsize::new(0));
+        let collector = MockCollector {
+            features: UsageFeatures::default(),
+            collect_calls,
+            policy_updates: Arc::clone(&policy_updates),
+        };
+
+        {
+            let mut st = state.write().await;
+            let mut policy = crate::config::PolicyConfig::default();
+            policy
+                .risk_weights_override
+                .insert("off_hours_activity_score".into(), 0.42);
+            st.pending_policy = Some(policy);
+        }
+
+        let cfg = test_config(dir.path().join("agent.db"));
+        let handle = tokio::spawn(run_agent(
+            cfg,
+            collector,
+            Arc::clone(&db),
+            Arc::clone(&state),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if policy_updates.load(Ordering::Relaxed) > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("policy update was not applied in time");
+
+        let st = state.read().await;
+        assert!(st.pending_policy.is_none());
+
+        handle.abort();
+    }
+}

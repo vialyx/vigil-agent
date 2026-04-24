@@ -103,5 +103,40 @@ fn event_build_benchmark(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, scoring_benchmarks, event_build_benchmark);
+fn baseline_update_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("baseline_update");
+    let features = UsageFeatures {
+        active_app_count_1h: 7,
+        unique_app_categories: 3,
+        off_hours_activity_score: 0.42,
+        app_switch_rate_per_min: 0.61,
+        sensitive_app_duration_pct: 0.34,
+        shadow_it_app_detected: true,
+        browser_incognito_usage: false,
+        high_cpu_anomaly_score: 0.48,
+        net_upload_anomaly_score: 0.39,
+        clipboard_access_count: 11,
+        screen_recording_active: false,
+        usb_device_attached: true,
+        new_usb_device: false,
+        ..Default::default()
+    };
+
+    group.bench_function("update_from_features", |b| {
+        b.iter(|| {
+            let mut baseline = BaselineStore::default();
+            baseline.update_from_features(black_box(&features));
+            black_box(baseline);
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    scoring_benchmarks,
+    event_build_benchmark,
+    baseline_update_benchmark
+);
 criterion_main!(benches);

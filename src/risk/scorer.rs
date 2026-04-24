@@ -3,11 +3,12 @@ use crate::risk::baseline::BaselineStore;
 use crate::risk::types::{FeatureContribution, RiskBand, RiskEvent, UsageFeatures};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 use uuid::Uuid;
 
 /// Default feature weights as specified in the problem statement.
 pub fn default_weights() -> HashMap<String, f32> {
-    let mut m = HashMap::new();
+    let mut m = HashMap::with_capacity(9);
     m.insert("off_hours_activity_score".into(), 0.20);
     m.insert("sensitive_app_duration_pct".into(), 0.18);
     m.insert("net_upload_anomaly_score".into(), 0.15);
@@ -38,13 +39,13 @@ pub fn compute_score(
     weights: &HashMap<String, f32>,
 ) -> (u32, Vec<FeatureContribution>, Vec<String>) {
     let mut weighted_sum: f64 = 0.0;
-    let mut contributions: Vec<FeatureContribution> = Vec::new();
-    let mut anomalies: Vec<String> = Vec::new();
+    let mut contributions: Vec<FeatureContribution> = Vec::with_capacity(9);
+    let mut anomalies: Vec<String> = Vec::with_capacity(6);
 
     // Clipboard count is normalised to [0,1] using a cap of 100 accesses.
     let clipboard_norm = (features.clipboard_access_count as f32 / 100.0).min(1.0) as f64;
 
-    let feature_values: Vec<(&str, f64)> = vec![
+    let feature_values: [(&str, f64); 9] = [
         (
             "off_hours_activity_score",
             features.off_hours_activity_score as f64,
@@ -77,18 +78,18 @@ pub fn compute_score(
         ),
     ];
 
-    for (name, raw_value) in &feature_values {
-        let weight = match weights.get(*name) {
+    for &(name, raw_value) in &feature_values {
+        let weight = match weights.get(name) {
             Some(w) => *w as f64,
             None => continue,
         };
 
         // Normalise against baseline; falls back to the raw value if no
         // baseline exists yet (first few cycles).
-        let normalised = if baseline.baselines.contains_key(*name) {
-            baseline.normalize(name, *raw_value)
-        } else {
-            raw_value.clamp(0.0, 1.0)
+        let normalised = match baseline.baselines.get(name) {
+            Some(b) if b.sample_count > 1 => b.normalize(raw_value),
+            Some(_) => 0.0,
+            None => raw_value.clamp(0.0, 1.0),
         };
 
         let contribution = weight * normalised;
@@ -97,28 +98,36 @@ pub fn compute_score(
         contributions.push(FeatureContribution {
             feature: name.to_string(),
             contribution: contribution as f32,
-            value: *raw_value as f32,
+            value: raw_value as f32,
         });
 
         // Flag features that are anomalous (normalised > 0.5).
         if normalised > 0.5 {
-            anomalies.push(name.to_string());
+            anomalies.push(name.to_owned());
         }
     }
 
     // Boolean flags always trigger regardless of baseline.
-    if features.screen_recording_active && !anomalies.contains(&"screen_recording_active".into()) {
-        anomalies.push("screen_recording_active".into());
+    if features.screen_recording_active
+        && !anomalies
+            .iter()
+            .any(|a| a.as_str() == "screen_recording_active")
+    {
+        anomalies.push("screen_recording_active".to_owned());
     }
-    if features.new_usb_device && !anomalies.contains(&"new_usb_device".into()) {
-        anomalies.push("new_usb_device".into());
+    if features.new_usb_device && !anomalies.iter().any(|a| a.as_str() == "new_usb_device") {
+        anomalies.push("new_usb_device".to_owned());
     }
-    if features.shadow_it_app_detected && !anomalies.contains(&"shadow_it_app_detected".into()) {
-        anomalies.push("shadow_it_app_detected".into());
+    if features.shadow_it_app_detected
+        && !anomalies
+            .iter()
+            .any(|a| a.as_str() == "shadow_it_app_detected")
+    {
+        anomalies.push("shadow_it_app_detected".to_owned());
     }
 
     // Sort contributions descending for readability.
-    contributions.sort_by(|a, b| b.contribution.partial_cmp(&a.contribution).unwrap());
+    contributions.sort_by(|a, b| b.contribution.total_cmp(&a.contribution));
 
     let score = (weighted_sum * 100.0).round().min(100.0) as u32;
     (score, contributions, anomalies)
@@ -153,6 +162,11 @@ pub fn build_risk_event(
 }
 
 fn os_version() -> String {
+    static OS_VERSION_CACHE: OnceLock<String> = OnceLock::new();
+    OS_VERSION_CACHE.get_or_init(os_version_impl).clone()
+}
+
+fn os_version_impl() -> String {
     #[cfg(target_os = "linux")]
     {
         std::fs::read_to_string("/proc/version")
