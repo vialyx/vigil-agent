@@ -7,9 +7,14 @@ use vigil_agent::{
     agent::run_agent,
     collector::PlatformCollector,
     config::Config,
-    ipc::{run_unix_server, AgentState},
+    ipc::AgentState,
     storage::AgentDb,
 };
+
+#[cfg(unix)]
+use vigil_agent::ipc::run_unix_server;
+#[cfg(windows)]
+use vigil_agent::ipc::run_windows_pipe_server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -38,14 +43,21 @@ async fn main() -> anyhow::Result<()> {
     // 5. Start IPC server.
     let ipc_path = config.agent.ipc_path.clone();
     let state_ipc = Arc::clone(&state);
+    #[cfg(unix)]
     tokio::spawn(async move {
         if let Err(e) = run_unix_server(&ipc_path, state_ipc).await {
             tracing::error!("IPC server error: {e}");
         }
     });
+    #[cfg(windows)]
+    tokio::spawn(async move {
+        if let Err(e) = run_windows_pipe_server(&ipc_path, state_ipc).await {
+            tracing::error!("IPC server error: {e}");
+        }
+    });
 
     // 6. Run the agent loop (blocking until shutdown signal).
-    let collector = PlatformCollector::new();
+    let collector = PlatformCollector::new(&config.policy);
     run_agent(config, collector, db, state).await?;
 
     Ok(())

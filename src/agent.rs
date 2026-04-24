@@ -68,7 +68,8 @@ pub async fn run_agent<C: Collector + 'static>(
     db: Arc<AgentDb>,
     state: SharedState,
 ) -> anyhow::Result<()> {
-    let weights = merged_weights(&config.policy);
+    let mut policy = config.policy.clone();
+    let mut weights = merged_weights(&policy);
     let dev_id = device_id();
     let usr_id = user_id();
 
@@ -96,16 +97,43 @@ pub async fn run_agent<C: Collector + 'static>(
     let scoring_interval = Duration::from_secs(config.agent.scoring_interval_secs);
     let mut ticker = time::interval(scoring_interval);
     let mut last_score: Option<u32> = None;
+    let rescore_notify = {
+        let st = state.read().await;
+        Arc::clone(&st.rescore_notify)
+    };
 
     let thresholds = &config.thresholds;
 
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            _ = rescore_notify.notified() => {
+                tracing::info!("Manual rescore requested");
+            }
+            signal = tokio::signal::ctrl_c() => {
+                if let Err(error) = signal {
+                    tracing::warn!("Failed to listen for ctrl-c: {error}");
+                }
+                tracing::info!("Shutdown signal received, flushing telemetry and exiting");
+                emitter.flush().await;
+                if let Ok(json) = serde_json::to_string(&baseline) {
+                    let _ = db.save_baseline(&baseline_key, &json);
+                }
+                break;
+            }
+        }
 
-        // Check for manual rescore request.
-        {
+        let pending_policy = {
             let mut st = state.write().await;
             st.rescore_requested = false;
+            st.pending_policy.take()
+        };
+
+        if let Some(new_policy) = pending_policy {
+            collector.update_policy(new_policy.clone())?;
+            weights = merged_weights(&new_policy);
+            policy = new_policy;
+            tracing::info!("Applied runtime policy update");
         }
 
         // 1. Collect features.
@@ -183,5 +211,11 @@ pub async fn run_agent<C: Collector + 'static>(
         if let Err(e) = db.purge_old_events(config.agent.baseline_window_days) {
             tracing::warn!("Purge error: {e}");
         }
+        if let Err(e) = db.purge_old_features(config.agent.baseline_window_days) {
+            tracing::warn!("Feature purge error: {e}");
+        }
     }
+
+    let _ = policy;
+    Ok(())
 }

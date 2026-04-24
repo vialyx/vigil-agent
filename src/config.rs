@@ -16,14 +16,43 @@ impl Config {
     /// Load configuration from a TOML file.  Falls back to defaults if the
     /// file is missing.
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
-        if path.exists() {
+        let cfg = if path.exists() {
             let raw = std::fs::read_to_string(path)?;
-            let cfg: Config = toml::from_str(&raw)?;
-            Ok(cfg)
+            toml::from_str(&raw)?
         } else {
             tracing::warn!("Config file {:?} not found, using defaults", path);
-            Ok(Config::default())
-        }
+            Config::default()
+        };
+
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.thresholds.medium <= self.thresholds.high
+                && self.thresholds.high <= self.thresholds.critical,
+            "thresholds must satisfy medium <= high <= critical"
+        );
+
+        anyhow::ensure!(
+            self.agent.scoring_interval_secs > 0,
+            "agent.scoring_interval_secs must be greater than zero"
+        );
+
+        anyhow::ensure!(
+            self.telemetry.emit_interval_secs > 0,
+            "telemetry.emit_interval_secs must be greater than zero"
+        );
+
+        let cert_configured = self.telemetry.mtls_cert_path.is_some();
+        let key_configured = self.telemetry.mtls_key_path.is_some();
+        anyhow::ensure!(
+            cert_configured == key_configured,
+            "telemetry mTLS requires both mtls_cert_path and mtls_key_path"
+        );
+
+        Ok(())
     }
 }
 
@@ -48,9 +77,60 @@ impl Default for AgentConfig {
             scoring_interval_secs: 60,
             baseline_window_days: 30,
             log_level: "info".to_string(),
-            db_path: PathBuf::from("/var/lib/vigil-agent/agent.db"),
-            ipc_path: "/var/run/vigil-agent/agent.sock".to_string(),
+            db_path: default_db_path(),
+            ipc_path: default_ipc_path(),
         }
+    }
+}
+
+fn default_db_path() -> PathBuf {
+    #[cfg(target_os = "linux")]
+    {
+        PathBuf::from("/var/lib/vigil-agent/agent.db")
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("Library/Application Support/vigil-agent/agent.db")
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("PROGRAMDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+            .join("VigilAgent")
+            .join("agent.db")
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        PathBuf::from("./agent.db")
+    }
+}
+
+fn default_ipc_path() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        "/var/run/vigil-agent/agent.sock".to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        "/tmp/vigil-agent.sock".to_string()
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        r"\\.\pipe\vigil-agent".to_string()
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        "./vigil-agent.sock".to_string()
     }
 }
 
@@ -171,5 +251,13 @@ critical = 80
     fn test_load_missing_file_uses_defaults() {
         let cfg = Config::load(std::path::Path::new("/nonexistent/path/agent.toml")).unwrap();
         assert_eq!(cfg.agent.scoring_interval_secs, 60);
+    }
+
+    #[test]
+    fn test_invalid_thresholds_fail_validation() {
+        let mut cfg = Config::default();
+        cfg.thresholds.medium = 80;
+        cfg.thresholds.high = 60;
+        assert!(cfg.validate().is_err());
     }
 }

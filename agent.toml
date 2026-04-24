@@ -2,8 +2,12 @@
 scoring_interval_secs = 60
 baseline_window_days  = 30
 log_level             = "info"
-db_path               = "/var/lib/vigil-agent/agent.db"
-ipc_path              = "/var/run/vigil-agent/agent.sock"
+# Leave paths unset to use platform-aware defaults:
+# - Linux:   /var/lib/vigil-agent/agent.db and /var/run/vigil-agent/agent.sock
+# - macOS:   ~/Library/Application Support/vigil-agent/agent.db and /tmp/vigil-agent.sock
+# - Windows: %PROGRAMDATA%\VigilAgent\agent.db and \\.\pipe\vigil-agent
+# db_path            = "/custom/path/agent.db"
+# ipc_path           = "/custom/path/agent.sock"
 
 [policy]
 risk_weights_override = {}

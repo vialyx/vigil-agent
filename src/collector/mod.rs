@@ -1,5 +1,8 @@
 use crate::risk::UsageFeatures;
+use crate::config::PolicyConfig;
 use async_trait::async_trait;
+
+mod common;
 
 /// A platform-specific OS event collector.
 #[async_trait]
@@ -9,6 +12,11 @@ pub trait Collector: Send + Sync {
 
     /// Human-readable name of this collector implementation.
     fn name(&self) -> &'static str;
+
+    /// Apply a new policy at runtime.
+    fn update_policy(&self, _policy: PolicyConfig) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 // Re-export the platform-specific implementation.

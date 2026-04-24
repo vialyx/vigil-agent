@@ -40,13 +40,18 @@ impl TelemetryEmitter {
             None => return, // telemetry disabled
         };
 
-        let queue = self.pending.lock().await;
-        if queue.is_empty() {
+        let payload = {
+            let mut queue = self.pending.lock().await;
+            if queue.is_empty() {
+                return;
+            }
+
+            std::mem::take(&mut *queue)
+        };
+
+        if payload.is_empty() {
             return;
         }
-
-        let payload = queue.clone();
-        drop(queue); // release lock during I/O
 
         match self.client.post(&endpoint).json(&payload).send().await {
             Ok(resp) if resp.status().is_success() => {
@@ -55,16 +60,17 @@ impl TelemetryEmitter {
                     payload.len(),
                     endpoint
                 );
-                self.pending.lock().await.clear();
             }
             Ok(resp) => {
                 tracing::warn!(
                     "Telemetry: server returned {status} for {endpoint}",
                     status = resp.status()
                 );
+                self.pending.lock().await.splice(0..0, payload);
             }
             Err(e) => {
                 tracing::warn!("Telemetry: failed to emit events: {e}");
+                self.pending.lock().await.splice(0..0, payload);
             }
         }
     }

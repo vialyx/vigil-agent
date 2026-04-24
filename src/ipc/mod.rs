@@ -1,10 +1,11 @@
+use crate::config::PolicyConfig;
 use crate::risk::{BaselineStore, RiskEvent, UsageFeatures};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::RwLock;
+use tokio::sync::{Notify, RwLock};
 
 // ── JSON-RPC 2.0 types ────────────────────────────────────────────────────────
 
@@ -58,12 +59,26 @@ impl JsonRpcResponse {
 // ── Shared agent state exposed over IPC ──────────────────────────────────────
 
 /// Shared, lock-guarded view of the agent's current state.
-#[derive(Default)]
 pub struct AgentState {
     pub latest_event: Option<RiskEvent>,
     pub latest_features: Option<UsageFeatures>,
     pub baseline: BaselineStore,
     pub rescore_requested: bool,
+    pub pending_policy: Option<PolicyConfig>,
+    pub rescore_notify: Arc<Notify>,
+}
+
+impl Default for AgentState {
+    fn default() -> Self {
+        Self {
+            latest_event: None,
+            latest_features: None,
+            baseline: BaselineStore::default(),
+            rescore_requested: false,
+            pending_policy: None,
+            rescore_notify: Arc::new(Notify::new()),
+        }
+    }
 }
 
 pub type SharedState = Arc<RwLock<AgentState>>;
@@ -114,13 +129,35 @@ pub async fn handle_request(raw: &str, state: SharedState) -> String {
         "rescore" => {
             let mut st = state.write().await;
             st.rescore_requested = true;
+            st.rescore_notify.notify_one();
             JsonRpcResponse::ok(id, Value::Bool(true))
         }
 
         "update_policy" => {
-            // Policy updates are validated but applied via the main agent loop.
-            // Here we simply acknowledge receipt.
-            JsonRpcResponse::ok(id, serde_json::json!({ "status": "accepted" }))
+            let payload = req.params.as_ref().and_then(|params| {
+                params
+                    .get("policy")
+                    .cloned()
+                    .or_else(|| Some(params.clone()))
+            });
+
+            match payload {
+                Some(value) => match serde_json::from_value::<PolicyConfig>(value) {
+                    Ok(policy) => {
+                        let mut st = state.write().await;
+                        st.pending_policy = Some(policy);
+                        st.rescore_requested = true;
+                        st.rescore_notify.notify_one();
+                        JsonRpcResponse::ok(id, serde_json::json!({ "status": "accepted" }))
+                    }
+                    Err(e) => JsonRpcResponse::error(
+                        id,
+                        -32602,
+                        format!("Invalid policy payload: {e}"),
+                    ),
+                },
+                None => JsonRpcResponse::error(id, -32602, "Missing policy payload"),
+            }
         }
 
         other => JsonRpcResponse::error(id, -32601, format!("Method not found: {other}")),
@@ -289,5 +326,16 @@ mod tests {
         let resp = handle_request(req, state).await;
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["result"]["status"], "accepted");
+    }
+
+    #[tokio::test]
+    async fn test_update_policy_stages_new_policy() {
+        let state = make_state().await;
+        let req = r#"{"jsonrpc":"2.0","method":"update_policy","params":{"policy":{"off_hours_start":"20:00","off_hours_end":"07:00"}},"id":6}"#;
+        handle_request(req, Arc::clone(&state)).await;
+        let st = state.read().await;
+        let policy = st.pending_policy.as_ref().expect("policy should be staged");
+        assert_eq!(policy.off_hours_start, "20:00");
+        assert!(st.rescore_requested);
     }
 }

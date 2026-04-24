@@ -1,4 +1,9 @@
+use crate::collector::common::{
+    browser_title_indicates_private, detect_screen_recording, detect_shadow_it,
+    unique_category_count, CollectorSettings,
+};
 use crate::collector::Collector;
+use crate::config::PolicyConfig;
 use crate::risk::UsageFeatures;
 use async_trait::async_trait;
 use std::collections::HashSet;
@@ -8,6 +13,7 @@ use std::time::{Duration, Instant};
 /// Linux-specific collector that reads process and system information from
 /// `/proc` and the X11 `_NET_ACTIVE_WINDOW` property (when available).
 pub struct LinuxCollector {
+    settings: Mutex<CollectorSettings>,
     /// Applications seen during the current 1-hour window.
     seen_apps: Mutex<HashSet<String>>,
     /// Timestamp of the last window reset.
@@ -20,17 +26,21 @@ pub struct LinuxCollector {
     scoring_window_start: Mutex<Instant>,
     /// Clipboard access counter (approximated via /proc fd inspection).
     clipboard_count: Mutex<u32>,
+    /// Previously observed USB device identities.
+    known_usb_devices: Mutex<HashSet<String>>,
 }
 
 impl LinuxCollector {
-    pub fn new() -> Self {
+    pub fn new(policy: &PolicyConfig) -> Self {
         Self {
+            settings: Mutex::new(CollectorSettings::from_policy(policy)),
             seen_apps: Mutex::new(HashSet::new()),
             window_start: Mutex::new(Instant::now()),
             last_app: Mutex::new(None),
             switch_count: Mutex::new(0),
             scoring_window_start: Mutex::new(Instant::now()),
             clipboard_count: Mutex::new(0),
+            known_usb_devices: Mutex::new(HashSet::new()),
         }
     }
 
@@ -71,36 +81,38 @@ impl LinuxCollector {
         }
     }
 
-    /// Detect whether a screen-recording / capture process is running.
-    fn screen_recording_active(procs: &[String]) -> bool {
-        let suspects = [
-            "ffmpeg",
-            "obs",
-            "simplescreenrecorder",
-            "kazam",
-            "recordmydesktop",
-        ];
-        procs.iter().any(|p| suspects.contains(&p.as_str()))
-    }
+    fn usb_devices() -> HashSet<String> {
+        let mut devices = HashSet::new();
+        let Ok(entries) = std::fs::read_dir("/sys/bus/usb/devices") else {
+            return devices;
+        };
 
-    /// Detect whether a USB device is attached by examining `/sys/bus/usb/devices`.
-    fn usb_device_attached() -> bool {
-        std::fs::read_dir("/sys/bus/usb/devices")
-            .map(|entries| entries.count() > 0)
-            .unwrap_or(false)
-    }
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let vendor = std::fs::read_to_string(path.join("idVendor")).ok();
+            let product = std::fs::read_to_string(path.join("idProduct")).ok();
+            let serial = std::fs::read_to_string(path.join("serial")).ok();
+            let name = std::fs::read_to_string(path.join("product")).ok();
 
-    /// Determine whether the current wall-clock time falls in the off-hours
-    /// window (18:00 – 08:00 local time, matching default policy).
-    fn off_hours_score() -> f32 {
-        use chrono::Timelike;
-        let hour = chrono::Local::now().hour();
-        // Off hours: before 08:00 or at/after 18:00.
-        if !(8..18).contains(&hour) {
-            1.0
-        } else {
-            0.0
+            if vendor.is_none() && product.is_none() && serial.is_none() && name.is_none() {
+                continue;
+            }
+
+            let identity = format!(
+                "{}:{}:{}:{}",
+                vendor.as_deref().unwrap_or_default().trim(),
+                product.as_deref().unwrap_or_default().trim(),
+                serial.as_deref().unwrap_or_default().trim(),
+                name.as_deref().unwrap_or_default().trim()
+            );
+            devices.insert(identity);
         }
+
+        devices
+    }
+
+    fn off_hours_score(&self) -> f32 {
+        self.settings.lock().unwrap().off_hours_score()
     }
 
     /// Approximate CPU pressure using `/proc/loadavg` (1-min average / #CPUs).
@@ -155,7 +167,7 @@ fn read_net_tx_bytes() -> u64 {
 
 impl Default for LinuxCollector {
     fn default() -> Self {
-        Self::new()
+        Self::new(&PolicyConfig::default())
     }
 }
 
@@ -176,6 +188,7 @@ impl Collector for LinuxCollector {
             seen.insert(app.clone());
         }
         let active_app_count_1h = seen.len() as u32;
+        let unique_app_categories = unique_category_count(seen.iter().map(String::as_str));
 
         // Track app switches.
         let mut last = self.last_app.lock().unwrap();
@@ -198,11 +211,32 @@ impl Collector for LinuxCollector {
         *switches = 0;
         *sw_start = Instant::now();
 
-        let screen_recording_active = Self::screen_recording_active(&procs);
-        let usb_device_attached = Self::usb_device_attached();
-        let off_hours_activity_score = Self::off_hours_score();
+        let settings = self.settings.lock().unwrap().clone();
+        let screen_recording_active = detect_screen_recording(&procs);
+        let usb_devices = Self::usb_devices();
+        let usb_device_attached = !usb_devices.is_empty();
+        let new_usb_device = {
+            let mut known_devices = self.known_usb_devices.lock().unwrap();
+            let is_new = !known_devices.is_empty() && usb_devices.iter().any(|device| !known_devices.contains(device));
+            if known_devices.is_empty() {
+                *known_devices = usb_devices.clone();
+                false
+            } else {
+                known_devices.extend(usb_devices.iter().cloned());
+                is_new
+            }
+        };
+        let off_hours_activity_score = self.off_hours_score();
         let high_cpu_anomaly_score = Self::cpu_anomaly_score();
         let net_upload_anomaly_score = Self::net_upload_anomaly_score();
+        let sensitive_app_duration_pct = fg_app
+            .as_deref()
+            .map(|app| if settings.is_sensitive_app(app) { 1.0 } else { 0.0 })
+            .unwrap_or(0.0);
+        let browser_incognito_usage = fg_app
+            .as_deref()
+            .map(browser_title_indicates_private)
+            .unwrap_or(false);
 
         let clipboard_count = {
             let mut c = self.clipboard_count.lock().unwrap();
@@ -213,23 +247,28 @@ impl Collector for LinuxCollector {
 
         Ok(UsageFeatures {
             active_app_count_1h,
-            unique_app_categories: 0, // category mapping not implemented yet
+            unique_app_categories,
             off_hours_activity_score,
             app_switch_rate_per_min,
-            sensitive_app_duration_pct: 0.0,
-            shadow_it_app_detected: false,
-            browser_incognito_usage: false,
+            sensitive_app_duration_pct,
+            shadow_it_app_detected: detect_shadow_it(&procs),
+            browser_incognito_usage,
             high_cpu_anomaly_score,
             net_upload_anomaly_score,
             clipboard_access_count: clipboard_count,
             screen_recording_active,
             usb_device_attached,
-            new_usb_device: false,
+            new_usb_device,
             ..Default::default()
         })
     }
 
     fn name(&self) -> &'static str {
         "linux"
+    }
+
+    fn update_policy(&self, policy: PolicyConfig) -> anyhow::Result<()> {
+        *self.settings.lock().unwrap() = CollectorSettings::from_policy(&policy);
+        Ok(())
     }
 }

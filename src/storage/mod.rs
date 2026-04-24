@@ -116,6 +116,42 @@ impl AgentDb {
         write_tx.commit()?;
         Ok(removed)
     }
+
+    /// Purge feature snapshots older than `retention_days` days.
+    pub fn purge_old_features(&self, retention_days: u32) -> anyhow::Result<usize> {
+        use chrono::{Duration, Utc};
+        let cutoff = Utc::now() - Duration::days(retention_days as i64);
+        let read_tx = self.db.begin_read()?;
+        let table = read_tx.open_table(FEATURES_TABLE)?;
+        let mut stale_keys = Vec::new();
+
+        for result in table.iter()? {
+            let (key, _) = result?;
+            let timestamp = key.value();
+            if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(timestamp) {
+                if ts < cutoff {
+                    stale_keys.push(timestamp.to_string());
+                }
+            }
+        }
+
+        drop(table);
+        drop(read_tx);
+
+        if stale_keys.is_empty() {
+            return Ok(0);
+        }
+
+        let write_tx = self.db.begin_write()?;
+        {
+            let mut table = write_tx.open_table(FEATURES_TABLE)?;
+            for key in &stale_keys {
+                table.remove(key.as_str())?;
+            }
+        }
+        write_tx.commit()?;
+        Ok(stale_keys.len())
+    }
 }
 
 #[cfg(test)]
@@ -205,5 +241,25 @@ mod tests {
         let remaining = db.load_events().unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].event_id, "new-id");
+    }
+
+    #[test]
+    fn test_purge_old_features() {
+        let dir = tempdir().unwrap();
+        let db = AgentDb::open(&dir.path().join("pf.db")).unwrap();
+
+        db.insert_features("2020-01-01T00:00:00Z", &UsageFeatures::default())
+            .unwrap();
+        db.insert_features(
+            &chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            &UsageFeatures {
+                active_app_count_1h: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let removed = db.purge_old_features(30).unwrap();
+        assert_eq!(removed, 1);
     }
 }
