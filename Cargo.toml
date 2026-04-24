@@ -3,7 +3,7 @@ name = "vigil-agent"
 version = "0.1.0"
 edition = "2021"
 description = "Cross-platform desktop agent for continuous application usage risk scoring"
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "vigil-agent"

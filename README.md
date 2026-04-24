@@ -50,6 +50,40 @@ Core modules:
 - Rust stable toolchain
 - Platform-specific access/permissions for richer signals (optional)
 
+### Permissions and signal coverage
+
+The agent runs with graceful fallbacks, but some signals are only available when the host grants the necessary OS permissions and helper tools are present.
+
+- Linux
+	- Foreground window detection currently relies on `xdotool`
+	- USB inventory reads from `/sys/bus/usb/devices`
+	- Process and network heuristics read from `/proc`
+	- For system-wide deployment, ensure the service account can read the configured `db_path` and create the configured `ipc_path`
+- macOS
+	- Foreground app/window heuristics use `osascript` and may require Accessibility and Automation approval for Terminal or the deployed binary
+	- USB inventory uses `system_profiler`
+	- Network heuristics use `netstat`
+	- If running under launchd, grant permissions to the final signed app/binary rather than just the interactive shell
+- Windows
+	- Foreground window/process heuristics use Win32 APIs
+	- USB and network inventory use PowerShell cmdlets such as `Get-PnpDevice` and `Get-NetAdapterStatistics`
+	- If deployed as a service, run under an account with access to the configured database directory and named pipe
+
+### Platform setup
+
+- Linux
+	- Install `xdotool` if foreground-window heuristics are desired
+	- Create parent directories for `db_path` and `ipc_path` when using custom paths
+	- If packaging as a service, prefer a dedicated system user and restrict database/socket permissions
+- macOS
+	- Add the terminal or packaged binary to Privacy & Security → Accessibility if foreground-window collection is required
+	- Expect the first `osascript` access to trigger a consent prompt on interactive runs
+	- If packaging as a launch agent/daemon, test permissions from the final execution context
+- Windows
+	- Ensure PowerShell is available in the runtime environment
+	- Verify the deployment account can create and bind the configured named pipe path
+	- Validate USB/network cmdlets under the same account used by the service or scheduled task
+
 ### Build
 
 ```bash
@@ -163,5 +197,5 @@ Default threshold: `+15%` slowdown (`REGRESSION_THRESHOLD_PCT` in workflow env).
 
 ## License
 
-MIT — see `LICENSE`.
+Apache License 2.0 — see `LICENSE`.
 
