@@ -45,12 +45,24 @@ impl Config {
             "telemetry.emit_interval_secs must be greater than zero"
         );
 
+        anyhow::ensure!(
+            self.telemetry.max_pending_events > 0,
+            "telemetry.max_pending_events must be greater than zero"
+        );
+
         let cert_configured = self.telemetry.mtls_cert_path.is_some();
         let key_configured = self.telemetry.mtls_key_path.is_some();
         anyhow::ensure!(
             cert_configured == key_configured,
             "telemetry mTLS requires both mtls_cert_path and mtls_key_path"
         );
+
+        if let Some(token) = &self.agent.ipc_auth_token {
+            anyhow::ensure!(
+                !token.trim().is_empty(),
+                "agent.ipc_auth_token must not be empty when configured"
+            );
+        }
 
         Ok(())
     }
@@ -69,6 +81,8 @@ pub struct AgentConfig {
     pub db_path: PathBuf,
     /// IPC socket path (Unix) or pipe name (Windows).
     pub ipc_path: String,
+    /// Optional shared token required for privileged IPC methods.
+    pub ipc_auth_token: Option<String>,
 }
 
 impl Default for AgentConfig {
@@ -79,6 +93,7 @@ impl Default for AgentConfig {
             log_level: "info".to_string(),
             db_path: default_db_path(),
             ipc_path: default_ipc_path(),
+            ipc_auth_token: None,
         }
     }
 }
@@ -173,6 +188,8 @@ pub struct TelemetryConfig {
     pub mtls_key_path: Option<PathBuf>,
     /// How often (seconds) to batch-emit events to the remote endpoint.
     pub emit_interval_secs: u64,
+    /// Maximum number of pending events queued in memory.
+    pub max_pending_events: usize,
 }
 
 impl Default for TelemetryConfig {
@@ -182,6 +199,7 @@ impl Default for TelemetryConfig {
             mtls_cert_path: None,
             mtls_key_path: None,
             emit_interval_secs: 300,
+            max_pending_events: 10_000,
         }
     }
 }
@@ -258,6 +276,13 @@ critical = 80
         let mut cfg = Config::default();
         cfg.thresholds.medium = 80;
         cfg.thresholds.high = 60;
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_invalid_max_pending_events_fails_validation() {
+        let mut cfg = Config::default();
+        cfg.telemetry.max_pending_events = 0;
         assert!(cfg.validate().is_err());
     }
 }

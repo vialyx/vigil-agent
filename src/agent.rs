@@ -7,6 +7,7 @@ use crate::telemetry::TelemetryEmitter;
 use chrono::Utc;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::time;
 
 /// Resolve the device identifier (hardware UUID or hostname fallback).
@@ -84,13 +85,21 @@ pub async fn run_agent<C: Collector + 'static>(
     let emitter = Arc::new(TelemetryEmitter::new(config.telemetry.clone())?);
     let emitter_clone = Arc::clone(&emitter);
     let emit_interval = config.telemetry.emit_interval_secs;
+    let telemetry_shutdown = Arc::new(Notify::new());
+    let telemetry_shutdown_clone = Arc::clone(&telemetry_shutdown);
 
     // Spawn telemetry flush task.
-    tokio::spawn(async move {
+    let telemetry_handle = tokio::spawn(async move {
         let mut interval = time::interval(Duration::from_secs(emit_interval));
         loop {
-            interval.tick().await;
-            emitter_clone.flush().await;
+            tokio::select! {
+                _ = interval.tick() => {
+                    emitter_clone.flush().await;
+                }
+                _ = telemetry_shutdown_clone.notified() => {
+                    break;
+                }
+            }
         }
     });
 
@@ -115,6 +124,8 @@ pub async fn run_agent<C: Collector + 'static>(
                     tracing::warn!("Failed to listen for ctrl-c: {error}");
                 }
                 tracing::info!("Shutdown signal received, flushing telemetry and exiting");
+                telemetry_shutdown.notify_waiters();
+                let _ = telemetry_handle.await;
                 emitter.flush().await;
                 if let Ok(json) = serde_json::to_string(&baseline) {
                     let _ = db.save_baseline(&baseline_key, &json);

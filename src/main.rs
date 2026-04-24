@@ -39,18 +39,22 @@ async fn main() -> anyhow::Result<()> {
 
     // 4. Build shared IPC state.
     let state = Arc::new(RwLock::new(AgentState::default()));
+    {
+        let mut st = state.write().await;
+        st.ipc_auth_token = config.agent.ipc_auth_token.clone();
+    }
 
     // 5. Start IPC server.
     let ipc_path = config.agent.ipc_path.clone();
     let state_ipc = Arc::clone(&state);
     #[cfg(unix)]
-    tokio::spawn(async move {
+    let ipc_handle = tokio::spawn(async move {
         if let Err(e) = run_unix_server(&ipc_path, state_ipc).await {
             tracing::error!("IPC server error: {e}");
         }
     });
     #[cfg(windows)]
-    tokio::spawn(async move {
+    let ipc_handle = tokio::spawn(async move {
         if let Err(e) = run_windows_pipe_server(&ipc_path, state_ipc).await {
             tracing::error!("IPC server error: {e}");
         }
@@ -59,6 +63,9 @@ async fn main() -> anyhow::Result<()> {
     // 6. Run the agent loop (blocking until shutdown signal).
     let collector = PlatformCollector::new(&config.policy);
     run_agent(config, collector, db, state).await?;
+
+    ipc_handle.abort();
+    let _ = ipc_handle.await;
 
     Ok(())
 }

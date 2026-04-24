@@ -116,6 +116,7 @@ Top-level sections:
 	- `log_level` (`error|warn|info|debug|trace`, default: `info`)
 	- `db_path` (platform-aware default when omitted)
 	- `ipc_path` (platform-aware default when omitted)
+	- `ipc_auth_token` (optional; required for privileged IPC methods when set)
 - `[policy]`
 	- `risk_weights_override` (per-feature overrides)
 	- `off_hours_start` / `off_hours_end`
@@ -124,6 +125,7 @@ Top-level sections:
 	- `remote_endpoint` (optional; disabled when absent)
 	- `mtls_cert_path` / `mtls_key_path` (optional, both required for mTLS)
 	- `emit_interval_secs` (default: `300`)
+	- `max_pending_events` (default: `10000`; bounds in-memory queue)
 - `[thresholds]`
 	- `medium`, `high`, `critical` (default: `30/55/75`)
 
@@ -141,6 +143,8 @@ Supported methods:
 - `get_baseline` → current baseline store
 - `rescore` → sets a rescore request flag
 - `update_policy` → validates and stages a new runtime `policy`, then triggers an immediate rescore
+
+If `agent.ipc_auth_token` is configured, include `"token":"<value>"` in `params` for privileged calls (`rescore`, `update_policy`).
 
 Example request:
 

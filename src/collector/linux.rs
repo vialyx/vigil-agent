@@ -28,6 +28,8 @@ pub struct LinuxCollector {
     clipboard_count: Mutex<u32>,
     /// Previously observed USB device identities.
     known_usb_devices: Mutex<HashSet<String>>,
+    /// Last network sample (timestamp, tx bytes) used for rate estimation.
+    last_net_sample: Mutex<Option<(Instant, u64)>>,
 }
 
 impl LinuxCollector {
@@ -41,6 +43,7 @@ impl LinuxCollector {
             scoring_window_start: Mutex::new(Instant::now()),
             clipboard_count: Mutex::new(0),
             known_usb_devices: Mutex::new(HashSet::new()),
+            last_net_sample: Mutex::new(None),
         }
     }
 
@@ -127,17 +130,28 @@ impl LinuxCollector {
         (load1 / ncpus as f32).min(1.0)
     }
 
-    /// Approximate net upload anomaly by reading `/proc/net/dev` twice with a
-    /// short delay and computing bytes-per-second.  Returns 0 on error.
-    fn net_upload_anomaly_score() -> f32 {
-        // Read initial counters.
-        let before = read_net_tx_bytes();
-        std::thread::sleep(Duration::from_millis(100));
-        let after = read_net_tx_bytes();
-        let bytes_per_100ms = after.saturating_sub(before) as f64;
-        // Normalise: 10 MB / 100 ms = 100 MB/s considered maximum.
-        let rate = (bytes_per_100ms / 1_000_000.0) as f32;
-        rate.min(1.0)
+    /// Approximate net upload anomaly using rolling `/proc/net/dev` samples.
+    fn net_upload_anomaly_score(&self) -> f32 {
+        let now = Instant::now();
+        let tx_bytes = read_net_tx_bytes();
+        let mut sample = self.last_net_sample.lock().unwrap();
+
+        let score = if let Some((prev_ts, prev_bytes)) = *sample {
+            let elapsed = now.saturating_duration_since(prev_ts).as_secs_f32();
+            if elapsed > 0.0 {
+                let delta_bytes = tx_bytes.saturating_sub(prev_bytes) as f32;
+                let bytes_per_sec = delta_bytes / elapsed;
+                // 100 MB/s is treated as the upper bound.
+                (bytes_per_sec / 100_000_000.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        *sample = Some((now, tx_bytes));
+        score
     }
 }
 
@@ -228,7 +242,7 @@ impl Collector for LinuxCollector {
         };
         let off_hours_activity_score = self.off_hours_score();
         let high_cpu_anomaly_score = Self::cpu_anomaly_score();
-        let net_upload_anomaly_score = Self::net_upload_anomaly_score();
+        let net_upload_anomaly_score = self.net_upload_anomaly_score();
         let sensitive_app_duration_pct = fg_app
             .as_deref()
             .map(|app| if settings.is_sensitive_app(app) { 1.0 } else { 0.0 })

@@ -19,6 +19,7 @@ pub struct MacosCollector {
     last_app: Mutex<Option<String>>,
     switch_count: Mutex<u32>,
     scoring_window_start: Mutex<Instant>,
+    last_net_sample: Mutex<Option<(Instant, u64)>>,
 }
 
 impl MacosCollector {
@@ -31,6 +32,7 @@ impl MacosCollector {
             last_app: Mutex::new(None),
             switch_count: Mutex::new(0),
             scoring_window_start: Mutex::new(Instant::now()),
+            last_net_sample: Mutex::new(None),
         }
     }
 
@@ -95,12 +97,26 @@ impl MacosCollector {
         (total_cpu / 400.0).clamp(0.0, 1.0)
     }
 
-    fn net_upload_anomaly_score() -> f32 {
-        let before = read_net_bytes_out();
-        std::thread::sleep(Duration::from_millis(125));
-        let after = read_net_bytes_out();
-        let bytes_per_125ms = after.saturating_sub(before) as f32;
-        (bytes_per_125ms / 1_000_000.0).clamp(0.0, 1.0)
+    fn net_upload_anomaly_score(&self) -> f32 {
+        let now = Instant::now();
+        let tx_bytes = read_net_bytes_out();
+        let mut sample = self.last_net_sample.lock().unwrap();
+
+        let score = if let Some((prev_ts, prev_bytes)) = *sample {
+            let elapsed = now.saturating_duration_since(prev_ts).as_secs_f32();
+            if elapsed > 0.0 {
+                let delta_bytes = tx_bytes.saturating_sub(prev_bytes) as f32;
+                let bytes_per_sec = delta_bytes / elapsed;
+                (bytes_per_sec / 100_000_000.0).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        *sample = Some((now, tx_bytes));
+        score
     }
 
     fn usb_devices() -> HashSet<String> {
@@ -256,7 +272,7 @@ impl Collector for MacosCollector {
                 .map(browser_title_indicates_private)
                 .unwrap_or(false),
             high_cpu_anomaly_score: Self::cpu_anomaly_score(),
-            net_upload_anomaly_score: Self::net_upload_anomaly_score(),
+            net_upload_anomaly_score: self.net_upload_anomaly_score(),
             clipboard_access_count: 0,
             screen_recording_active,
             usb_device_attached,

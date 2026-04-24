@@ -65,6 +65,7 @@ pub struct AgentState {
     pub baseline: BaselineStore,
     pub rescore_requested: bool,
     pub pending_policy: Option<PolicyConfig>,
+    pub ipc_auth_token: Option<String>,
     pub rescore_notify: Arc<Notify>,
 }
 
@@ -76,6 +77,7 @@ impl Default for AgentState {
             baseline: BaselineStore::default(),
             rescore_requested: false,
             pending_policy: None,
+            ipc_auth_token: None,
             rescore_notify: Arc::new(Notify::new()),
         }
     }
@@ -96,6 +98,23 @@ pub async fn handle_request(raw: &str, state: SharedState) -> String {
     };
 
     let id = req.id.clone();
+
+    let requires_auth = matches!(req.method.as_str(), "rescore" | "update_policy");
+
+    if requires_auth {
+        let st = state.read().await;
+        if let Some(expected) = st.ipc_auth_token.as_deref() {
+            let provided = req
+                .params
+                .as_ref()
+                .and_then(|params| params.get("token"))
+                .and_then(Value::as_str);
+            if provided != Some(expected) {
+                let resp = JsonRpcResponse::error(id, -32003, "Unauthorized");
+                return serde_json::to_string(&resp).unwrap_or_default();
+            }
+        }
+    }
 
     let resp = match req.method.as_str() {
         "get_risk_state" => {
@@ -183,6 +202,15 @@ pub async fn run_unix_server(socket_path: &str, state: SharedState) -> anyhow::R
 
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("binding Unix socket {socket_path}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(socket_path, perms)
+            .with_context(|| format!("setting socket permissions for {socket_path}"))?;
+    }
+
     tracing::info!("IPC server listening on {socket_path}");
 
     loop {
@@ -337,5 +365,25 @@ mod tests {
         let policy = st.pending_policy.as_ref().expect("policy should be staged");
         assert_eq!(policy.off_hours_start, "20:00");
         assert!(st.rescore_requested);
+    }
+
+    #[tokio::test]
+    async fn test_rescore_requires_token_when_configured() {
+        let state = make_state().await;
+        {
+            let mut st = state.write().await;
+            st.ipc_auth_token = Some("secret-token".to_string());
+        }
+
+        let req_missing = r#"{"jsonrpc":"2.0","method":"rescore","id":7}"#;
+        let resp_missing = handle_request(req_missing, Arc::clone(&state)).await;
+        let v_missing: Value = serde_json::from_str(&resp_missing).unwrap();
+        assert_eq!(v_missing["error"]["code"], -32003);
+
+        let req_ok =
+            r#"{"jsonrpc":"2.0","method":"rescore","params":{"token":"secret-token"},"id":8}"#;
+        let resp_ok = handle_request(req_ok, Arc::clone(&state)).await;
+        let v_ok: Value = serde_json::from_str(&resp_ok).unwrap();
+        assert_eq!(v_ok["result"], true);
     }
 }

@@ -1,6 +1,8 @@
 use crate::config::TelemetryConfig;
 use crate::risk::RiskEvent;
 use anyhow::Context;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -8,7 +10,8 @@ use tokio::sync::Mutex;
 /// configured SIEM/SOAR endpoint over HTTPS (with optional mTLS).
 pub struct TelemetryEmitter {
     config: TelemetryConfig,
-    pending: Arc<Mutex<Vec<RiskEvent>>>,
+    pending: Arc<Mutex<VecDeque<RiskEvent>>>,
+    dropped_events: Arc<AtomicU64>,
     client: reqwest::Client,
 }
 
@@ -19,14 +22,20 @@ impl TelemetryEmitter {
         let client = build_client(&config)?;
         Ok(Self {
             config,
-            pending: Arc::new(Mutex::new(Vec::new())),
+            pending: Arc::new(Mutex::new(VecDeque::new())),
+            dropped_events: Arc::new(AtomicU64::new(0)),
             client,
         })
     }
 
     /// Enqueue a risk event for the next emission batch.
     pub async fn enqueue(&self, event: RiskEvent) {
-        self.pending.lock().await.push(event);
+        let mut queue = self.pending.lock().await;
+        while queue.len() >= self.config.max_pending_events {
+            queue.pop_front();
+            self.dropped_events.fetch_add(1, Ordering::Relaxed);
+        }
+        queue.push_back(event);
     }
 
     /// Flush all pending events to the remote endpoint.
@@ -46,7 +55,7 @@ impl TelemetryEmitter {
                 return;
             }
 
-            std::mem::take(&mut *queue)
+            queue.drain(..).collect::<Vec<_>>()
         };
 
         if payload.is_empty() {
@@ -55,10 +64,12 @@ impl TelemetryEmitter {
 
         match self.client.post(&endpoint).json(&payload).send().await {
             Ok(resp) if resp.status().is_success() => {
+                let dropped = self.dropped_events.swap(0, Ordering::Relaxed);
                 tracing::info!(
-                    "Telemetry: emitted {} event(s) → {}",
+                    "Telemetry: emitted {} event(s) → {} (dropped while offline: {})",
                     payload.len(),
-                    endpoint
+                    endpoint,
+                    dropped
                 );
             }
             Ok(resp) => {
@@ -66,11 +77,17 @@ impl TelemetryEmitter {
                     "Telemetry: server returned {status} for {endpoint}",
                     status = resp.status()
                 );
-                self.pending.lock().await.splice(0..0, payload);
+                let mut queue = self.pending.lock().await;
+                for event in payload.into_iter().rev() {
+                    queue.push_front(event);
+                }
             }
             Err(e) => {
                 tracing::warn!("Telemetry: failed to emit events: {e}");
-                self.pending.lock().await.splice(0..0, payload);
+                let mut queue = self.pending.lock().await;
+                for event in payload.into_iter().rev() {
+                    queue.push_front(event);
+                }
             }
         }
     }
@@ -144,5 +161,19 @@ mod tests {
         emitter.flush().await;
         // Events remain in queue because there is no endpoint.
         assert_eq!(emitter.pending_count().await, 1);
+    }
+
+    #[tokio::test]
+    async fn test_queue_is_bounded() {
+        let cfg = TelemetryConfig {
+            remote_endpoint: None,
+            max_pending_events: 2,
+            ..Default::default()
+        };
+        let emitter = TelemetryEmitter::new(cfg).unwrap();
+        emitter.enqueue(make_event("e1")).await;
+        emitter.enqueue(make_event("e2")).await;
+        emitter.enqueue(make_event("e3")).await;
+        assert_eq!(emitter.pending_count().await, 2);
     }
 }
