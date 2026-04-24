@@ -87,17 +87,50 @@ impl BaselineStore {
     pub fn feature_map(f: &UsageFeatures) -> Vec<(String, f64)> {
         vec![
             ("active_app_count_1h".into(), f.active_app_count_1h as f64),
-            ("unique_app_categories".into(), f.unique_app_categories as f64),
-            ("off_hours_activity_score".into(), f.off_hours_activity_score as f64),
-            ("app_switch_rate_per_min".into(), f.app_switch_rate_per_min as f64),
-            ("sensitive_app_duration_pct".into(), f.sensitive_app_duration_pct as f64),
-            ("shadow_it_app_detected".into(), f.shadow_it_app_detected as u8 as f64),
-            ("browser_incognito_usage".into(), f.browser_incognito_usage as u8 as f64),
-            ("high_cpu_anomaly_score".into(), f.high_cpu_anomaly_score as f64),
-            ("net_upload_anomaly_score".into(), f.net_upload_anomaly_score as f64),
-            ("clipboard_access_count".into(), f.clipboard_access_count as f64),
-            ("screen_recording_active".into(), f.screen_recording_active as u8 as f64),
-            ("usb_device_attached".into(), f.usb_device_attached as u8 as f64),
+            (
+                "unique_app_categories".into(),
+                f.unique_app_categories as f64,
+            ),
+            (
+                "off_hours_activity_score".into(),
+                f.off_hours_activity_score as f64,
+            ),
+            (
+                "app_switch_rate_per_min".into(),
+                f.app_switch_rate_per_min as f64,
+            ),
+            (
+                "sensitive_app_duration_pct".into(),
+                f.sensitive_app_duration_pct as f64,
+            ),
+            (
+                "shadow_it_app_detected".into(),
+                f.shadow_it_app_detected as u8 as f64,
+            ),
+            (
+                "browser_incognito_usage".into(),
+                f.browser_incognito_usage as u8 as f64,
+            ),
+            (
+                "high_cpu_anomaly_score".into(),
+                f.high_cpu_anomaly_score as f64,
+            ),
+            (
+                "net_upload_anomaly_score".into(),
+                f.net_upload_anomaly_score as f64,
+            ),
+            (
+                "clipboard_access_count".into(),
+                f.clipboard_access_count as f64,
+            ),
+            (
+                "screen_recording_active".into(),
+                f.screen_recording_active as u8 as f64,
+            ),
+            (
+                "usb_device_attached".into(),
+                f.usb_device_attached as u8 as f64,
+            ),
             ("new_usb_device".into(), f.new_usb_device as u8 as f64),
         ]
     }
@@ -116,7 +149,10 @@ mod tests {
         }
         // Same value → score near 0.
         let norm = b.normalize(10.0);
-        assert!(norm < 0.05, "expected near-zero for baseline value, got {norm}");
+        assert!(
+            norm < 0.05,
+            "expected near-zero for baseline value, got {norm}"
+        );
 
         // A value far above the baseline (100.0 vs μ ≈ 10.0) should normalise
         // close to 1.0 because (100 - 10) / max(σ, ε) >> 3 → clamped then / 3.

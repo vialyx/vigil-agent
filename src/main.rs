@@ -7,16 +7,15 @@ use vigil_agent::{
     agent::run_agent,
     collector::PlatformCollector,
     config::Config,
-    ipc::{AgentState, run_unix_server},
+    ipc::{run_unix_server, AgentState},
     storage::AgentDb,
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 1. Load config.
-    let config_path = PathBuf::from(
-        std::env::var("VIGIL_CONFIG").unwrap_or_else(|_| "agent.toml".to_string()),
-    );
+    let config_path =
+        PathBuf::from(std::env::var("VIGIL_CONFIG").unwrap_or_else(|_| "agent.toml".to_string()));
     let config = Config::load(&config_path)?;
 
     // 2. Initialise logging.
@@ -24,7 +23,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| EnvFilter::new(&config.agent.log_level));
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    tracing::info!("vigil-agent starting (version {})", env!("CARGO_PKG_VERSION"));
+    tracing::info!(
+        "vigil-agent starting (version {})",
+        env!("CARGO_PKG_VERSION")
+    );
     tracing::info!("Config: {:?}", config_path);
 
     // 3. Open database.

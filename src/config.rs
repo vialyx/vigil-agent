@@ -21,10 +21,7 @@ impl Config {
             let cfg: Config = toml::from_str(&raw)?;
             Ok(cfg)
         } else {
-            tracing::warn!(
-                "Config file {:?} not found, using defaults",
-                path
-            );
+            tracing::warn!("Config file {:?} not found, using defaults", path);
             Ok(Config::default())
         }
     }

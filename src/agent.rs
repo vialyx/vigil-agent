@@ -1,7 +1,7 @@
 use crate::collector::Collector;
 use crate::config::Config;
 use crate::ipc::SharedState;
-use crate::risk::{BaselineStore, RiskBand, build_risk_event, compute_score, merged_weights};
+use crate::risk::{build_risk_event, compute_score, merged_weights, BaselineStore, RiskBand};
 use crate::storage::AgentDb;
 use crate::telemetry::TelemetryEmitter;
 use chrono::Utc;
@@ -121,10 +121,11 @@ pub async fn run_agent<C: Collector + 'static>(
         baseline.update_from_features(&features);
 
         // 3. Score.
-        let (score, contributions, anomalies) =
-            compute_score(&features, &baseline, &weights);
+        let (score, contributions, anomalies) = compute_score(&features, &baseline, &weights);
 
-        let delta = last_score.map(|prev| score as i32 - prev as i32).unwrap_or(0);
+        let delta = last_score
+            .map(|prev| score as i32 - prev as i32)
+            .unwrap_or(0);
         last_score = Some(score);
 
         let band = RiskBand::from_score(

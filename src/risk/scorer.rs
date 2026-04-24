@@ -45,15 +45,36 @@ pub fn compute_score(
     let clipboard_norm = (features.clipboard_access_count as f32 / 100.0).min(1.0) as f64;
 
     let feature_values: Vec<(&str, f64)> = vec![
-        ("off_hours_activity_score", features.off_hours_activity_score as f64),
-        ("sensitive_app_duration_pct", features.sensitive_app_duration_pct as f64),
-        ("net_upload_anomaly_score", features.net_upload_anomaly_score as f64),
-        ("shadow_it_app_detected", features.shadow_it_app_detected as u8 as f64),
-        ("screen_recording_active", features.screen_recording_active as u8 as f64),
+        (
+            "off_hours_activity_score",
+            features.off_hours_activity_score as f64,
+        ),
+        (
+            "sensitive_app_duration_pct",
+            features.sensitive_app_duration_pct as f64,
+        ),
+        (
+            "net_upload_anomaly_score",
+            features.net_upload_anomaly_score as f64,
+        ),
+        (
+            "shadow_it_app_detected",
+            features.shadow_it_app_detected as u8 as f64,
+        ),
+        (
+            "screen_recording_active",
+            features.screen_recording_active as u8 as f64,
+        ),
         ("new_usb_device", features.new_usb_device as u8 as f64),
         ("clipboard_access_count", clipboard_norm),
-        ("app_switch_rate_per_min", features.app_switch_rate_per_min as f64),
-        ("high_cpu_anomaly_score", features.high_cpu_anomaly_score as f64),
+        (
+            "app_switch_rate_per_min",
+            features.app_switch_rate_per_min as f64,
+        ),
+        (
+            "high_cpu_anomaly_score",
+            features.high_cpu_anomaly_score as f64,
+        ),
     ];
 
     for (name, raw_value) in &feature_values {
@@ -225,7 +246,10 @@ mod tests {
 
         let (score_low, _, _) = compute_score(&features, &baseline, &low_weights);
         let (score_high, _, _) = compute_score(&features, &baseline, &high_weights);
-        assert!(score_high > score_low, "higher weight should yield higher score");
+        assert!(
+            score_high > score_low,
+            "higher weight should yield higher score"
+        );
     }
 
     #[test]

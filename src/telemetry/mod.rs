@@ -48,13 +48,7 @@ impl TelemetryEmitter {
         let payload = queue.clone();
         drop(queue); // release lock during I/O
 
-        match self
-            .client
-            .post(&endpoint)
-            .json(&payload)
-            .send()
-            .await
-        {
+        match self.client.post(&endpoint).json(&payload).send().await {
             Ok(resp) if resp.status().is_success() => {
                 tracing::info!(
                     "Telemetry: emitted {} event(s) → {}",
@@ -87,17 +81,14 @@ fn build_client(config: &TelemetryConfig) -> anyhow::Result<reqwest::Client> {
         .timeout(std::time::Duration::from_secs(30));
 
     // mTLS: load client certificate and key if configured.
-    if let (Some(cert_path), Some(key_path)) =
-        (&config.mtls_cert_path, &config.mtls_key_path)
-    {
+    if let (Some(cert_path), Some(key_path)) = (&config.mtls_cert_path, &config.mtls_key_path) {
         let cert_pem = std::fs::read(cert_path)
             .with_context(|| format!("reading mTLS cert {:?}", cert_path))?;
-        let key_pem = std::fs::read(key_path)
-            .with_context(|| format!("reading mTLS key {:?}", key_path))?;
-        let identity = reqwest::Identity::from_pem(
-            &[cert_pem.as_slice(), key_pem.as_slice()].concat(),
-        )
-        .context("building mTLS identity")?;
+        let key_pem =
+            std::fs::read(key_path).with_context(|| format!("reading mTLS key {:?}", key_path))?;
+        let identity =
+            reqwest::Identity::from_pem(&[cert_pem.as_slice(), key_pem.as_slice()].concat())
+                .context("building mTLS identity")?;
         builder = builder.identity(identity);
     }
 
@@ -138,7 +129,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_flush_no_endpoint_does_nothing() {
-        let cfg = TelemetryConfig { remote_endpoint: None, ..Default::default() };
+        let cfg = TelemetryConfig {
+            remote_endpoint: None,
+            ..Default::default()
+        };
         let emitter = TelemetryEmitter::new(cfg).unwrap();
         emitter.enqueue(make_event("e1")).await;
         emitter.flush().await;

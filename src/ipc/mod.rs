@@ -46,7 +46,10 @@ impl JsonRpcResponse {
         Self {
             jsonrpc: "2.0",
             result: None,
-            error: Some(JsonRpcError { code, message: message.into() }),
+            error: Some(JsonRpcError {
+                code,
+                message: message.into(),
+            }),
             id,
         }
     }
@@ -68,10 +71,7 @@ pub type SharedState = Arc<RwLock<AgentState>>;
 // ── IPC server ────────────────────────────────────────────────────────────────
 
 /// Dispatch a single JSON-RPC request and return a serialised response.
-pub async fn handle_request(
-    raw: &str,
-    state: SharedState,
-) -> String {
+pub async fn handle_request(raw: &str, state: SharedState) -> String {
     let req: JsonRpcRequest = match serde_json::from_str(raw) {
         Ok(r) => r,
         Err(e) => {
@@ -134,10 +134,7 @@ pub async fn handle_request(
 /// Each connection receives newline-delimited JSON-RPC requests and
 /// responses.
 #[cfg(unix)]
-pub async fn run_unix_server(
-    socket_path: &str,
-    state: SharedState,
-) -> anyhow::Result<()> {
+pub async fn run_unix_server(socket_path: &str, state: SharedState) -> anyhow::Result<()> {
     use tokio::net::UnixListener;
 
     // Remove a stale socket file if present.
@@ -180,10 +177,7 @@ async fn handle_unix_connection(
 
 /// Named-pipe IPC server for Windows.
 #[cfg(windows)]
-pub async fn run_windows_pipe_server(
-    pipe_name: &str,
-    state: SharedState,
-) -> anyhow::Result<()> {
+pub async fn run_windows_pipe_server(pipe_name: &str, state: SharedState) -> anyhow::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     tracing::info!("IPC server listening on {pipe_name}");
@@ -219,7 +213,10 @@ mod tests {
         let req = r#"{"jsonrpc":"2.0","method":"get_risk_state","id":1}"#;
         let resp = handle_request(req, state).await;
         let v: Value = serde_json::from_str(&resp).unwrap();
-        assert!(v.get("error").is_some(), "should return error when no state");
+        assert!(
+            v.get("error").is_some(),
+            "should return error when no state"
+        );
     }
 
     #[tokio::test]

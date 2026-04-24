@@ -26,7 +26,11 @@ impl MacosCollector {
             .ok()?;
         if output.status.success() {
             let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if name.is_empty() { None } else { Some(name) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(name)
+            }
         } else {
             None
         }
@@ -35,7 +39,17 @@ impl MacosCollector {
     fn off_hours_score() -> f32 {
         use chrono::Timelike;
         let hour = chrono::Local::now().hour();
-        if !(8..18).contains(&hour) { 1.0 } else { 0.0 }
+        if !(8..18).contains(&hour) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+impl Default for MacosCollector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

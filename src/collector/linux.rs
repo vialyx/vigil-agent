@@ -43,9 +43,7 @@ impl LinuxCollector {
                 let name_str = name.to_string_lossy();
                 // Only numeric directories are PIDs.
                 if name_str.chars().all(|c| c.is_ascii_digit()) {
-                    if let Ok(comm) =
-                        std::fs::read_to_string(entry.path().join("comm"))
-                    {
+                    if let Ok(comm) = std::fs::read_to_string(entry.path().join("comm")) {
                         procs.push(comm.trim().to_string());
                     }
                 }
@@ -62,9 +60,7 @@ impl LinuxCollector {
             .output()
             .ok()?;
         if output.status.success() {
-            let name = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if name.is_empty() {
                 None
             } else {
@@ -77,7 +73,13 @@ impl LinuxCollector {
 
     /// Detect whether a screen-recording / capture process is running.
     fn screen_recording_active(procs: &[String]) -> bool {
-        let suspects = ["ffmpeg", "obs", "simplescreenrecorder", "kazam", "recordmydesktop"];
+        let suspects = [
+            "ffmpeg",
+            "obs",
+            "simplescreenrecorder",
+            "kazam",
+            "recordmydesktop",
+        ];
         procs.iter().any(|p| suspects.contains(&p.as_str()))
     }
 
@@ -94,7 +96,11 @@ impl LinuxCollector {
         use chrono::Timelike;
         let hour = chrono::Local::now().hour();
         // Off hours: before 08:00 or at/after 18:00.
-        if !(8..18).contains(&hour) { 1.0 } else { 0.0 }
+        if !(8..18).contains(&hour) {
+            1.0
+        } else {
+            0.0
+        }
     }
 
     /// Approximate CPU pressure using `/proc/loadavg` (1-min average / #CPUs).

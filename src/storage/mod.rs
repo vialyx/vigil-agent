@@ -24,8 +24,7 @@ impl AgentDb {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating DB directory {:?}", parent))?;
         }
-        let db = Database::create(path)
-            .with_context(|| format!("opening database {:?}", path))?;
+        let db = Database::create(path).with_context(|| format!("opening database {:?}", path))?;
         // Ensure tables exist.
         {
             let write_tx = db.begin_write()?;
@@ -89,9 +88,7 @@ impl AgentDb {
     pub fn load_baseline(&self, key: &str) -> anyhow::Result<Option<String>> {
         let read_tx = self.db.begin_read()?;
         let table = read_tx.open_table(BASELINE_TABLE)?;
-        Ok(table
-            .get(key)?
-            .map(|v| v.value().to_string()))
+        Ok(table.get(key)?.map(|v| v.value().to_string()))
     }
 
     /// Purge events older than `retention_days` days.
@@ -199,9 +196,7 @@ mod tests {
 
         // Insert a recent event.
         let mut recent = make_event("new-id", 20);
-        recent.timestamp_utc = chrono::Utc::now()
-            .format("%Y-%m-%dT%H:%M:%SZ")
-            .to_string();
+        recent.timestamp_utc = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         db.insert_event(&recent).unwrap();
 
         let removed = db.purge_old_events(30).unwrap();

@@ -18,7 +18,11 @@ impl WindowsCollector {
     fn off_hours_score() -> f32 {
         use chrono::Timelike;
         let hour = chrono::Local::now().hour();
-        if !(8..18).contains(&hour) { 1.0 } else { 0.0 }
+        if !(8..18).contains(&hour) {
+            1.0
+        } else {
+            0.0
+        }
     }
 }
 

@@ -131,8 +131,14 @@ mod tests {
         assert_eq!(RiskBand::from_score(54, med, high, crit), RiskBand::Medium);
         assert_eq!(RiskBand::from_score(55, med, high, crit), RiskBand::High);
         assert_eq!(RiskBand::from_score(74, med, high, crit), RiskBand::High);
-        assert_eq!(RiskBand::from_score(75, med, high, crit), RiskBand::Critical);
-        assert_eq!(RiskBand::from_score(100, med, high, crit), RiskBand::Critical);
+        assert_eq!(
+            RiskBand::from_score(75, med, high, crit),
+            RiskBand::Critical
+        );
+        assert_eq!(
+            RiskBand::from_score(100, med, high, crit),
+            RiskBand::Critical
+        );
     }
 
     #[test]
