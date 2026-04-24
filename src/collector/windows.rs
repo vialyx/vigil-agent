@@ -62,7 +62,7 @@ impl WindowsCollector {
     fn foreground_window() -> Option<(String, String)> {
         unsafe {
             let hwnd: HWND = GetForegroundWindow();
-            if hwnd.0 == std::ptr::null_mut() {
+            if hwnd.0.is_null() {
                 return None;
             }
 
