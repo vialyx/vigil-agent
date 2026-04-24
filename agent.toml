@@ -1,0 +1,23 @@
+[agent]
+scoring_interval_secs = 60
+baseline_window_days  = 30
+log_level             = "info"
+db_path               = "/var/lib/vigil-agent/agent.db"
+ipc_path              = "/var/run/vigil-agent/agent.sock"
+
+[policy]
+risk_weights_override = {}
+off_hours_start       = "18:00"
+off_hours_end         = "08:00"
+sensitive_app_categories = ["finance", "security", "devtools-remote"]
+
+[telemetry]
+# remote_endpoint = "https://siem.corp.example.com/events"
+# mtls_cert_path  = "/etc/vigil-agent/device.crt"
+# mtls_key_path   = "/etc/vigil-agent/device.key"
+emit_interval_secs = 300
+
+[thresholds]
+medium   = 30
+high     = 55
+critical = 75
